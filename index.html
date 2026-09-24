@@ -386,6 +386,20 @@ body.themed .bar{background:color-mix(in srgb,var(--bg) 88%,transparent);-webkit
 .char-card.hasplate{color:#fff;background-size:cover;background-position:center;border-color:transparent;text-shadow:0 1px 3px rgba(0,0,0,.6)}
 .char-card.hasplate h3{color:#fff}
 @media (max-width:560px){.plates{grid-template-columns:1fr}.camphero{padding:18px}.camplogo{width:96px;height:96px}.campeditbtn{position:static}}
+
+/* v7: multiple campaigns */
+.picker .hero h1{font-family:var(--serif)}
+.camptiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin:16px 0}
+.camptile{position:relative;border-radius:14px;overflow:hidden;color:#fff;box-shadow:0 6px 22px rgba(0,0,0,.2)}
+.camptile-main{all:unset;box-sizing:border-box;cursor:pointer;display:flex;flex-direction:column;gap:6px;width:100%;min-height:150px;padding:18px;justify-content:flex-end}
+.camptile-main:focus-visible{outline:3px solid var(--focus,#76b6a3);outline-offset:-3px}
+.camptile-name{font-family:var(--serif);font-size:1.5rem;font-weight:800;line-height:1.15;text-shadow:0 1px 3px rgba(0,0,0,.5)}
+.camptile-tag{font-size:.92rem;opacity:.92}
+.camptile-go{font-size:.85rem;opacity:.85;margin-top:4px}
+.invrow{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.invchip{border:1px solid var(--line);background:var(--raised);color:var(--ink);border-radius:999px;padding:3px 10px;font-size:.82rem;cursor:pointer}
+.invchip.on{background:var(--verd-soft);border-color:var(--verd)}
+.switchbtn{max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -1896,10 +1910,10 @@ function renderInner(){
   const app = document.getElementById('app');
   const y = window.scrollY;
   const c = C();
-  if (!c && !['home','login','campaign','notes'].includes(S.view)) S.view = 'home';
-  if ((S.view === 'campaign' || S.view === 'notes') && !CL.on) S.view = 'home';
+  if (!c && !['home','login','campaign','notes','picker'].includes(S.view)) S.view = 'home';
+  if ((S.view === 'campaign' || S.view === 'notes') && !CL.on) S.view = CL.status === 'ready' ? 'picker' : 'home';
   document.body.classList.toggle('has-stepnav', S.view === 'build');
-  app.innerHTML = S.view === 'login' ? renderLogin() : renderBar() + (S.view === 'home' ? (CL.on ? renderHomeCloud() : renderHome()) : S.view === 'campaign' ? renderCampaign() : S.view === 'notes' ? renderNotes() : S.view === 'build' ? renderBuild() : renderSheet());
+  app.innerHTML = S.view === 'login' ? renderLogin() : renderBar() + (S.view === 'home' ? (CL.on ? renderHomeCloud() : renderHome()) : S.view === 'campaign' ? renderCampaign() : S.view === 'notes' ? renderNotes() : S.view === 'picker' ? renderPicker() : S.view === 'build' ? renderBuild() : renderSheet());
   window.scrollTo(0, y);
   applyPageStyle();
   renderTray();
@@ -2236,22 +2250,25 @@ document.getElementById('fileImg').addEventListener('change', e => {
 });
 document.getElementById('fileJson').addEventListener('change', e => { const f = e.target.files[0]; if (!f) return; f.text().then(importText); e.target.value = ''; });
 window.addEventListener('beforeunload', saveNow);
-// ---------- shared campaign (Firebase accounts + Firestore)
+// ---------- shared campaigns (Firebase accounts + Firestore)
 const FB_CFG = window.DELVEBOUND_FIREBASE || null;
 const DM_EMAIL = String(window.DELVEBOUND_DM_EMAIL || '').trim().toLowerCase();
 const CL = {status:'checking', on:false, me:null, email:'', owner:false, viewAsPlayer:false, db:null, auth:null, fbUser:null,
-  camp:null, campStr:'', campDirty:false, art:{}, artStr:'', notes:{}, noteDirty:new Set(), noteTimers:{}, editCamp:false, roster:{}, subs:{}, synced:{}, dirty:new Set(), wq:{},
-  pending:false, localChars:null, created:false, myName:'', authMode:'signin', authMsg:'', authErr:'', busy:false, unsubs:[]};
-const isDM = () => CL.on && CL.owner && !CL.viewAsPlayer;
+  cid:null, camps:{}, camp:null, campStr:'', campDirty:false, art:{}, artStr:'', notes:{}, noteDirty:new Set(), noteTimers:{},
+  editCamp:false, members:{}, users:{}, myDoc:null, subs:{}, campSubs:[], synced:{}, dirty:new Set(), wq:{}, legacy:null,
+  pending:false, localChars:null, myName:'', authMode:'signin', authMsg:'', authErr:'', busy:false, unsubs:[]};
+const isDM = () => CL.on && campDM() && !CL.viewAsPlayer;
+const campDM = () => CL.owner || (CL.camp && CL.camp.dmUid === CL.me);
 const stableStr = v => v === null || typeof v !== 'object' ? JSON.stringify(v) : Array.isArray(v) ? '[' + v.map(stableStr).join(',') + ']'
   : '{' + Object.keys(v).filter(k => v[k] !== undefined).sort().map(k => JSON.stringify(k) + ':' + stableStr(v[k])).join(',') + '}';
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
-const CAMP_DEFAULT = () => ({dmUid: CL.me, name:'Our campaign', tagline:'', books: lsGet(BOOKS_KEY, {}),
+const CAMP_DEFAULT = name => ({dmUid: CL.me, name: name || 'New campaign', tagline:'', books: lsGet(BOOKS_KEY, {}), createdAt: Date.now(),
   sections: ['Overview','Setting','House rules','Quests & leads','Session log'].map(t => ({id: uid(), title: t, text: ''}))});
-const nameOf = id => (CL.roster[id] && CL.roster[id].name) || (id === CL.me ? (CL.myName || 'You') : 'A player');
-function avatarHTML(id, cls){ const n = id === CL.me && !CL.roster[id] ? (CL.myName || CL.email || '?') : nameOf(id);
+const nameOf = id => (CL.members[id] && CL.members[id].name) || (CL.users[id] && CL.users[id].name) || (id === CL.me ? (CL.myName || 'You') : 'A player');
+function avatarHTML(id, cls){ const n = id === CL.me ? (CL.myName || CL.email || '?') : nameOf(id);
   let h = 0; for (const ch of String(id || n)) h = (h * 31 + ch.charCodeAt(0)) % 360;
   return `<span class="avatar ${cls||''}" style="background:hsl(${h} 38% 42%)" aria-hidden="true">${esc((n || '?').trim().charAt(0).toUpperCase() || '?')}</span>`; }
+const campPath = (cid, rest) => 'campaigns/' + cid + (rest ? '/' + rest : '');
 
 function cloudSchedule(){
   const a = document.activeElement;
@@ -2263,7 +2280,7 @@ document.addEventListener('focusout', () => { if (CL.pending) setTimeout(() => {
 function cloudErr(e, what){
   const code = e && e.code;
   if (code === 'permission-denied') { toast('You don’t have permission to save ' + (what || 'that change') + '.'); return; }
-  if (code === 'resource-exhausted') { toast('The campaign has hit its free daily limit, so ' + (what || 'that') + ' couldn’t be saved. It will work again tomorrow.'); return; }
+  if (code === 'resource-exhausted') { toast('The site has hit its free daily limit, so ' + (what || 'that') + ' couldn’t be saved. It will work again tomorrow.'); return; }
   if (code === 'invalid-argument') { toast((what || 'That') + ' is too large to save. Try a smaller portrait or backdrop.'); return; }
   console.error(e); toast('Couldn’t save ' + (what || 'that change') + ' just now. It will retry on your next edit.');
 }
@@ -2280,89 +2297,118 @@ const authMsg = e => AUTH_MSG[e && e.code] || (e && e.message) || 'Something wen
 
 function cloudBoot(){
   if (!FB_CFG || !FB_CFG.apiKey || !FB_CFG.projectId || !window.firebase) { CL.status = 'local'; CL.whyLocal = !window.firebase ? 'sdk' : 'config'; safeRender(); return; }
-  try {
-    firebase.initializeApp(FB_CFG);
-    CL.auth = firebase.auth(); CL.db = firebase.firestore();
-  } catch(e) { console.error(e); CL.status = 'local'; CL.whyLocal = 'config'; safeRender(); return; }
+  try { firebase.initializeApp(FB_CFG); CL.auth = firebase.auth(); CL.db = firebase.firestore(); }
+  catch(e) { console.error(e); CL.status = 'local'; CL.whyLocal = 'config'; safeRender(); return; }
   CL.auth.getRedirectResult().catch(e => { CL.authErr = authMsg(e); safeRender(); });
-  CL.auth.onAuthStateChanged(u => { onAuth(u).catch(e => { console.error(e); CL.status = 'error'; CL.authErr = e && e.message || String(e); safeRender(); }); });
+  CL.auth.onAuthStateChanged(u => { onAuth(u).catch(e => { console.error(e); CL.status = 'error'; CL.authErr = (e && e.message) || String(e); safeRender(); }); });
 }
 
 async function onAuth(u){
   CL.fbUser = u; CL.unsubs.forEach(f => { try { f(); } catch(e){} }); CL.unsubs = [];
-  if (!u) { CL.status = 'signedout'; CL.me = null; safeRender(); return; }
+  if (!u) { CL.status = 'signedout'; CL.me = null; CL.on = false; safeRender(); return; }
   CL.me = u.uid; CL.email = (u.email || '').toLowerCase(); CL.myName = u.displayName || CL.signupName || (u.email || '').split('@')[0];
   CL.status = 'checking'; safeRender();
-  const own = await CL.db.doc('campaign/owner').get();
+  const own = await CL.db.doc('site/owner').get();
   if (!own.exists) {
     if (DM_EMAIL && CL.email === DM_EMAIL) CL.status = u.emailVerified ? 'claim' : 'verify';
-    else CL.status = 'nocamp';
+    else CL.status = 'nosite';
     safeRender(); return;
   }
   CL.owner = own.data().dmUid === u.uid;
-  const pref = CL.db.doc('players/' + u.uid);
-  if (CL.owner) { await pref.set({name: CL.myName, approved: true}, {merge: true}); CL.status = 'ready'; safeRender(); return; }
-  const p = await pref.get();
-  if (!p.exists) await pref.set({name: CL.myName, approved: false, joined: Date.now()});
-  CL.unsubs.push(pref.onSnapshot(s => {
-    const d = s.exists ? s.data() : null;
+  const mine = CL.db.doc('users/' + u.uid);
+  const snap = await mine.get();
+  if (!snap.exists) await mine.set({name: CL.myName, email: CL.email, joined: Date.now(), campaigns: []});
+  CL.unsubs.push(mine.onSnapshot(s => {
+    const d = s.exists ? s.data() : null; CL.myDoc = d;
     if (d && d.name) CL.myName = d.name;
-    const was = CL.status;
-    CL.status = d && d.approved ? 'ready' : d ? 'pending' : 'removed';
-    if (CL.on && CL.status !== 'ready') { location.reload(); return; }
-    if (was !== CL.status) safeRender();
+    watchMyCampaigns(d ? (d.campaigns || []) : []);
+    if (CL.on && CL.cid && !(d && (d.campaigns || []).includes(CL.cid)) && !CL.owner) { leaveCampaign(); toast('Your DM removed you from that campaign.'); }
+    cloudSchedule();
   }, () => {}));
+  if (CL.owner) {
+    CL.unsubs.push(CL.db.collection('campaigns').onSnapshot(q => { const next = {}; q.docs.forEach(d => next[d.id] = d.data()); CL.camps = next; cloudSchedule(); }, () => {}));
+    CL.unsubs.push(CL.db.collection('users').onSnapshot(q => { const next = {}; q.docs.forEach(d => next[d.id] = d.data()); CL.users = next; cloudSchedule(); }, () => {}));
+    CL.db.doc('campaign/main').get().then(s => { if (s.exists) { CL.legacy = s.data(); cloudSchedule(); } }).catch(() => {});
+  }
+  CL.status = 'ready'; S.view = 'picker'; safeRender();
 }
 
-async function claimCampaign(){
+const campWatch = {};
+function watchMyCampaigns(ids){
+  if (CL.owner) return;
+  ids.forEach(cid => {
+    if (!SAFE_ID.test(cid) || campWatch[cid]) return;
+    campWatch[cid] = CL.db.doc(campPath(cid)).onSnapshot(s => { if (s.exists) CL.camps[cid] = s.data(); else delete CL.camps[cid]; cloudSchedule(); }, () => {});
+    CL.unsubs.push(campWatch[cid]);
+  });
+}
+
+async function claimSite(){
   const u = CL.fbUser; if (!u) return;
   CL.busy = true; safeRender();
   try {
-    await CL.db.doc('campaign/owner').set({dmUid: u.uid, at: Date.now()});
-    const c = CAMP_DEFAULT(); await CL.db.doc('campaign/main').set(c);
-    await CL.db.doc('players/' + u.uid).set({name: CL.myName, approved: true, joined: Date.now()});
-    CL.owner = true; CL.status = 'ready';
+    await CL.db.doc('site/owner').set({dmUid: u.uid, at: Date.now()});
+    await CL.db.doc('users/' + u.uid).set({name: CL.myName, email: CL.email, joined: Date.now(), campaigns: []}, {merge: true});
+    CL.owner = true; await onAuth(u);
   } catch(e) { CL.authErr = e.code === 'permission-denied' ? 'Firebase refused: check that the email in firestore.rules matches your account exactly and that your email is verified.' : authMsg(e); }
   CL.busy = false; safeRender();
 }
 
-function enterCampaign(){
-  if (CL.status !== 'ready') return;
-  CL.on = true; CL.localChars = S.chars; S.chars = {}; S.cur = null; S.view = 'home';
-  const db = CL.db;
-  CL.unsubs.push(db.doc('campaign/main').onSnapshot(s => {
-    if (!s.exists) { if (!CL.camp) CL.camp = {name:'Campaign', tagline:'', books:{}, sections:[]}; cloudSchedule(); return; }
+async function createCampaign(name){
+  if (!CL.owner) return null;
+  const cid = uid(); const data = CAMP_DEFAULT(name);
+  try {
+    await CL.db.doc(campPath(cid)).set(data);
+    await CL.db.doc(campPath(cid, 'members/' + CL.me)).set({name: CL.myName, role: 'dm', joined: Date.now()});
+    await CL.db.doc('users/' + CL.me).update({campaigns: firebase.firestore.FieldValue.arrayUnion(cid)});
+    CL.camps[cid] = data; return cid;
+  } catch(e) { cloudErr(e, 'the new campaign'); return null; }
+}
+
+function enterCampaign(cid){
+  if (!cid || !CL.camps[cid]) return;
+  CL.campSubs.forEach(f => { try { f(); } catch(e){} }); CL.campSubs = [];
+  CL.cid = cid; CL.on = true; CL.camp = CL.camps[cid]; CL.campStr = stableStr(CL.camp);
+  CL.art = {}; CL.artStr = ''; CL.notes = {}; CL.members = {}; CL.subs = {}; CL.synced = {}; CL.dirty = new Set(); CL.editCamp = false;
+  if (CL.localChars === null) CL.localChars = Object.keys(S.chars).length ? S.chars : null;
+  S.chars = {}; S.cur = null; S.view = 'home';
+  const db = CL.db, sub = f => CL.campSubs.push(f);
+  sub(db.doc(campPath(cid)).onSnapshot(s => {
+    if (!s.exists) { toast('That campaign has been deleted.'); leaveCampaign(); return; }
     const d = s.data(), str = stableStr(d);
+    CL.camps[cid] = d;
     if (str === CL.campStr || CL.campDirty) return;
     CL.camp = clone(d); CL.campStr = str; cloudSchedule();
   }, e => cloudErr(e, 'the campaign')));
-  CL.unsubs.push(db.doc('campaign/art').onSnapshot(s => {
+  sub(db.doc(campPath(cid, 'meta/art')).onSnapshot(s => {
     const d = s.exists ? s.data() : {}; const str = stableStr(d);
     if (str === CL.artStr) return; CL.art = clone(d); CL.artStr = str; cloudSchedule();
   }, () => {}));
-  CL.unsubs.push(db.collection('notes').onSnapshot(q => {
+  sub(db.collection(campPath(cid, 'notes')).onSnapshot(q => {
     let ch = false;
-    q.docChanges().forEach(x => {
-      const id = x.doc.id;
+    q.docChanges().forEach(x => { const id = x.doc.id;
       if (x.type === 'removed') { delete CL.notes[id]; ch = true; return; }
-      if (CL.noteDirty.has(id)) return;
-      CL.notes[id] = clone(x.doc.data()); ch = true;
-    });
+      if (CL.noteDirty.has(id)) return; CL.notes[id] = clone(x.doc.data()); ch = true; });
     if (ch) cloudSchedule();
   }, () => {}));
-  CL.unsubs.push(db.collection('players').onSnapshot(q => {
-    const next = {}; q.docs.forEach(d => { next[d.id] = d.data(); });
-    CL.roster = next;
-    Object.entries(next).forEach(([id, p]) => { if (p.approved) cloudChars(id); });
-    cloudSchedule();
+  sub(db.collection(campPath(cid, 'members')).onSnapshot(q => {
+    const next = {}; q.docs.forEach(d => next[d.id] = d.data()); CL.members = next;
+    Object.keys(next).forEach(cloudChars); cloudSchedule();
   }, () => {}));
   cloudChars(CL.me);
   safeRender(); window.scrollTo(0, 0);
 }
+function leaveCampaign(){
+  CL.campSubs.forEach(f => { try { f(); } catch(e){} }); CL.campSubs = [];
+  CL.on = false; CL.cid = null; CL.camp = null; CL.members = {}; CL.notes = {}; CL.art = {}; CL.subs = {}; CL.synced = {};
+  S.chars = {}; S.cur = null; S.view = 'picker'; safeRender(); window.scrollTo(0, 0);
+}
 
 function cloudChars(owner){
-  if (!SAFE_ID.test(owner) || CL.subs[owner]) return;
-  CL.subs[owner] = CL.db.collection('chars/' + owner + '/list').onSnapshot(q => {
+  if (!SAFE_ID.test(owner) || CL.subs[owner] || !CL.cid) return;
+  const cid = CL.cid;
+  CL.subs[owner] = CL.db.collection(campPath(cid, 'chars/' + owner + '/list')).onSnapshot(q => {
+    if (CL.cid !== cid) return;
     let changed = false;
     q.docChanges().forEach(ch => {
       const id = ch.doc.id;
@@ -2373,24 +2419,25 @@ function cloudChars(owner){
     });
     if (changed) cloudSchedule();
   }, () => {});
-  CL.unsubs.push(CL.subs[owner]);
+  CL.campSubs.push(CL.subs[owner]);
 }
 
-const canWriteChar = c => c && ((c._owner || CL.me) === CL.me || CL.owner);
+const canWriteChar = c => c && ((c._owner || CL.me) === CL.me || campDM());
 function cloudFlush(){
-  if (!CL.on) return;
+  if (!CL.on || !CL.cid) return;
+  const cid = CL.cid;
   Object.values(S.chars).forEach(c => {
     if (!canWriteChar(c)) return;
     const owner = c._owner || CL.me; c._owner = owner;
     const out = clone(c); delete out._owner;
     let str = stableStr(out);
     if (str === CL.synced[c.id]) return;
-    if (str.length > 900000 && out.style && out.style.image) { c.style.image = ''; out.style.image = ''; str = stableStr(out); toast('That backdrop image was too large to save to the campaign, so it was removed. Try a smaller picture.'); }
-    if (str.length > 950000) { toast('This character is too large to save to the campaign. Try a smaller portrait.'); return; }
+    if (str.length > 900000 && out.style && out.style.image) { c.style.image = ''; out.style.image = ''; str = stableStr(out); toast('That backdrop image was too large to save, so it was removed. Try a smaller picture.'); }
+    if (str.length > 950000) { toast('This character is too large to save. Try a smaller portrait.'); return; }
     CL.synced[c.id] = str; CL.dirty.add(c.id);
     const body = {ownerId: owner, name: c.name || '', updated: Date.now(), json: str};
     const prev = CL.wq[c.id] || Promise.resolve();
-    CL.wq[c.id] = prev.then(() => CL.db.doc('chars/' + owner + '/list/' + c.id).set(body))
+    CL.wq[c.id] = prev.then(() => CL.db.doc(campPath(cid, 'chars/' + owner + '/list/' + c.id)).set(body))
       .catch(e => { delete CL.synced[c.id]; cloudErr(e, 'this character'); })
       .finally(() => { if (CL.synced[c.id] === str) CL.dirty.delete(c.id); });
   });
@@ -2398,15 +2445,66 @@ function cloudFlush(){
 
 let campTimer = null;
 function campSave(now){
-  if (!isDM() || !CL.camp) return;
+  if (!isDM() || !CL.camp || !CL.cid) return;
+  const cid = CL.cid;
   CL.campDirty = true; clearTimeout(campTimer);
   campTimer = setTimeout(async () => {
-    const out = clone(CL.camp); out.dmUid = CL.me; const str = stableStr(out);
-    try { await CL.db.doc('campaign/main').set(out); CL.campStr = str; } catch(e) { cloudErr(e, 'the campaign'); }
+    const out = clone(CL.camp); const str = stableStr(out);
+    try { await CL.db.doc(campPath(cid)).set(out); CL.campStr = str; } catch(e) { cloudErr(e, 'the campaign'); }
     CL.campDirty = false;
   }, now ? 0 : 700);
 }
 
+// ---------- invitations
+async function inviteUser(uidTo, cid){
+  if (!CL.owner) return;
+  const u = CL.users[uidTo] || {};
+  try {
+    await CL.db.doc(campPath(cid, 'members/' + uidTo)).set({name: u.name || 'A player', role: 'player', joined: Date.now(), invitedBy: CL.me});
+    await CL.db.doc('users/' + uidTo).update({campaigns: firebase.firestore.FieldValue.arrayUnion(cid)});
+    toast((u.name || 'They') + ' can now open ' + ((CL.camps[cid] || {}).name || 'that campaign') + '.');
+  } catch(e) { cloudErr(e, 'that invitation'); }
+}
+async function uninviteUser(uidTo, cid){
+  if (!CL.owner) return;
+  try {
+    await CL.db.doc(campPath(cid, 'members/' + uidTo)).delete();
+    await CL.db.doc('users/' + uidTo).update({campaigns: firebase.firestore.FieldValue.arrayRemove(cid)});
+  } catch(e) { cloudErr(e, 'that change'); }
+}
+
+// ---------- bringing the old single-campaign data across
+async function migrateLegacy(){
+  if (!CL.owner || !CL.legacy) return;
+  CL.busy = true; safeRender();
+  const db = CL.db;
+  try {
+    const cid = uid();
+    const old = CL.legacy;
+    const data = {dmUid: CL.me, name: old.name || 'My campaign', tagline: old.tagline || '', books: old.books || {}, sections: old.sections || [], createdAt: Date.now()};
+    await db.doc(campPath(cid)).set(data);
+    await db.doc(campPath(cid, 'members/' + CL.me)).set({name: CL.myName, role: 'dm', joined: Date.now()});
+    await db.doc('users/' + CL.me).update({campaigns: firebase.firestore.FieldValue.arrayUnion(cid)});
+    const art = await db.doc('campaign/art').get().catch(() => null);
+    if (art && art.exists) await db.doc(campPath(cid, 'meta/art')).set(art.data());
+    const players = await db.collection('players').get().catch(() => ({docs: []}));
+    for (const p of players.docs) {
+      const d = p.data();
+      if (p.id !== CL.me && d.approved) {
+        await db.doc(campPath(cid, 'members/' + p.id)).set({name: d.name || 'A player', role: 'player', joined: d.joined || Date.now(), invitedBy: CL.me});
+        await db.doc('users/' + p.id).set({name: d.name || 'A player', campaigns: firebase.firestore.FieldValue.arrayUnion(cid)}, {merge: true});
+      }
+      const list = await db.collection('chars/' + p.id + '/list').get().catch(() => ({docs: []}));
+      for (const c of list.docs) await db.doc(campPath(cid, 'chars/' + p.id + '/list/' + c.id)).set(c.data());
+    }
+    const notes = await db.collection('notes').get().catch(() => ({docs: []}));
+    for (const n of notes.docs) await db.doc(campPath(cid, 'notes/' + n.id)).set(n.data());
+    await db.doc('campaign/main').delete().catch(() => {});
+    CL.legacy = null; CL.camps[cid] = data;
+    toast('Your campaign, characters and notes were brought across.');
+  } catch(e) { cloudErr(e, 'the old campaign'); }
+  CL.busy = false; safeRender();
+}
 function authForm(){
   const m = CL.authMode;
   const title = {signin:'Sign in', signup:'Create an account', reset:'Reset your password'}[m];
@@ -2430,22 +2528,16 @@ function renderLogin(){
   let body;
   if (st === 'checking') body = `<div class="panel"><p class="muted" style="margin:0">Connecting…</p></div>`;
   else if (st === 'signedout') body = authForm();
-  else if (st === 'ready') body = `<div class="panel login-card">${who}
-      <div style="margin:10px 0"><span class="rolechip ${CL.owner ? 'dm' : ''}">${CL.owner ? 'Dungeon Master' : 'Player'}</span></div>
-      <p class="small muted" style="margin:0 0 12px">${CL.owner ? 'You choose the sourcebooks, write the campaign pages, let players in, and can see and edit every character.' : 'Your characters save to the campaign, where your DM and party can see them.'}</p>
-      <button class="btn primary" data-act="enterCampaign" style="width:100%;justify-content:center">Enter the campaign</button>${out}</div>`;
-  else if (st === 'pending') body = `<div class="panel login-card">${who}<p style="margin:14px 0 6px"><strong>Waiting for your DM.</strong></p>
-      <p class="small muted" style="margin:0">Your DM needs to let you into the campaign. Ask them to open the Campaign page and approve you — this screen updates by itself once they do.</p>${out}</div>`;
-  else if (st === 'removed') body = `<div class="panel login-card">${who}<p class="small" style="margin:14px 0 0">You’re no longer part of this campaign. Ask your DM if that’s a mistake.</p>${out}</div>`;
-  else if (st === 'claim') body = `<div class="panel login-card">${who}<p style="margin:14px 0 6px"><strong>Set up your campaign</strong></p>
-      <p class="small muted" style="margin:0 0 12px">This account matches the DM email in the site settings. Setting up makes you the campaign’s DM — this can only happen once.</p>
+  else if (st === 'ready') body = `<div class="panel login-card">${who}<p class="small muted" style="margin:14px 0 0">Loading your campaigns…</p>${out}</div>`;
+  else if (st === 'claim') body = `<div class="panel login-card">${who}<p style="margin:14px 0 6px"><strong>Set up this site</strong></p>
+      <p class="small muted" style="margin:0 0 12px">This account matches the DM email in the site settings. Setting up makes you the DM of this site: you can run any number of campaigns and decide who joins each one. This can only happen once.</p>
       ${CL.authErr ? `<p class="note warn">${esc(CL.authErr)}</p>` : ''}
-      <button class="btn primary" data-act="claimCampaign" style="width:100%;justify-content:center" ${CL.busy?'disabled':''}>Set up the campaign as DM</button>${out}</div>`;
+      <button class="btn primary" data-act="claimSite" style="width:100%;justify-content:center" ${CL.busy?'disabled':''}>Set up as DM</button>${out}</div>`;
   else if (st === 'verify') body = `<div class="panel login-card">${who}<p style="margin:14px 0 6px"><strong>Verify your email first</strong></p>
-      <p class="small muted" style="margin:0 0 12px">To become the DM, confirm this email address. Open the link we sent you, then come back and press the button.</p>
+      <p class="small muted" style="margin:0 0 12px">To set the site up as DM, confirm this email address. Open the link we sent you, then come back and press the button.</p>
       ${CL.authMsg ? `<p class="note">${esc(CL.authMsg)}</p>` : ''}
       <div class="row"><button class="btn primary" data-act="verifyCheck">I’ve verified it</button><button class="btn" data-act="verifySend">Send the email again</button></div>${out}</div>`;
-  else if (st === 'nocamp') body = `<div class="panel login-card">${who}<p class="small" style="margin:14px 0 0">The DM hasn’t set up the campaign yet. Check back once they have.</p>${out}</div>`;
+  else if (st === 'nosite') body = `<div class="panel login-card">${who}<p class="small" style="margin:14px 0 0">The DM hasn’t set this site up yet. Check back once they have.</p>${out}</div>`;
   else if (st === 'error') body = `<div class="panel"><p style="margin-top:0">Couldn’t load the campaign.</p><p class="muted small">${esc(CL.authErr)}</p><button class="btn" data-act="reload">Try again</button>${out}</div>`;
   else body = `<div class="panel"><p style="margin-top:0">${CL.whyLocal === 'sdk' ? 'Couldn’t reach the sign-in service, so accounts aren’t available right now.' : 'Accounts aren’t set up for this copy of the site yet.'}</p>
       <p class="muted small">${CL.whyLocal === 'sdk' ? 'Check your connection and reload.' : 'The DM needs to fill in firebase-config.js (see SETUP.md).'} You can still build characters saved in this browser only.</p>
@@ -2464,13 +2556,14 @@ const safeImg = u => typeof u === 'string' && u.startsWith('data:image/') ? u : 
 function barNav(){
   if (!CL.on) return '';
   const cur = S.view === 'campaign' ? 'toCampaign' : S.view === 'notes' ? 'toNotes' : 'home';
-  const nPending = CL.owner ? Object.values(CL.roster).filter(p => !p.approved).length : 0;
-  const tab = (v, l, extra) => `<button class="navtab" data-act="${v}" aria-current="${cur === v ? 'page' : 'false'}">${l}${extra||''}</button>`;
-  return `<nav class="navtabs" aria-label="Sections">${tab('home', 'Characters')}${tab('toCampaign', 'Campaign', nPending ? ` <span class="badge" title="${nPending} waiting to join">${nPending}</span>` : '')}${tab('toNotes', 'Notes')}</nav>`;
+  const tab = (v, l) => `<button class="navtab" data-act="${v}" aria-current="${cur === v ? 'page' : 'false'}">${l}</button>`;
+  return `<nav class="navtabs" aria-label="Sections">${tab('home', 'Characters')}${tab('toCampaign', 'Campaign')}${tab('toNotes', 'Notes')}</nav>`;
 }
 function barUser(){
-  if (!CL.on) return '';
-  return `<button class="rolechip ${isDM() ? 'dm' : ''}" data-act="accountOpen" title="Your account">${avatarHTML(CL.me, 'xs')}${isDM() ? 'DM' : CL.owner ? 'DM · player view' : 'Player'}</button>`;
+  if (!CL.me || CL.status !== 'ready') return '';
+  const many = CL.on && Object.keys(CL.camps).length > 1;
+  return `${CL.on ? `<button class="btn sm ghost switchbtn" data-act="toPicker" title="${many ? 'Switch campaign' : 'All campaigns'}">${esc((CL.camp || {}).name || 'Campaigns')} ▾</button>` : ''}
+    <button class="rolechip ${isDM() ? 'dm' : ''}" data-act="accountOpen" title="Your account">${avatarHTML(CL.me, 'xs')}${!CL.on ? esc(CL.myName || 'Account') : isDM() ? 'DM' : campDM() ? 'DM · player view' : 'Player'}</button>`;
 }
 function ownerBanner(){
   const c = C(); if (!CL.on || !c || ['home','campaign','notes'].includes(S.view)) return '';
@@ -2525,9 +2618,9 @@ function renderCampaign(){
   const logo = artUrl('logo'), back = artUrl('backdrop');
   const chars = Object.values(S.chars).filter(c => c._owner && c._owner !== dmId()).sort((a,b) => (a.created||0) - (b.created||0));
   const withChars = new Set(chars.map(c => c._owner));
-  const noChar = Object.entries(CL.roster).filter(([id, p]) => p.approved && id !== dmId() && !withChars.has(id));
-  const pendingP = Object.entries(CL.roster).filter(([id, p]) => !p.approved);
-  const approvedP = Object.entries(CL.roster).filter(([id, p]) => p.approved && id !== CL.me);
+  const noChar = Object.entries(CL.members).filter(([id]) => id !== dmId() && !withChars.has(id));
+  const members = Object.entries(CL.members).filter(([id]) => id !== CL.me);
+  const others = Object.entries(CL.users).filter(([id, u]) => id !== CL.me && !CL.members[id]);
   const hero = `<section class="camphero ${back ? 'hasback' : ''}" style="${back ? `background-image:linear-gradient(to top, rgba(10,12,14,.85), rgba(10,12,14,.25)), url(${back})` : ''}">
       <div class="camplogo ${logo ? '' : 'empty'}" style="${logo ? `background-image:url(${logo})` : ''}">${logo ? '' : icon.logo}</div>
       <div class="camphead">${edit ? `<input type="text" class="campname" data-camp="name" value="${esc(camp.name)}" aria-label="Campaign name" placeholder="Campaign name">
@@ -2537,9 +2630,7 @@ function renderCampaign(){
         : `<h1>${esc(camp.name || 'Campaign')}</h1>${camp.tagline ? `<p class="camptagline">${esc(camp.tagline)}</p>` : ''}`}</div>
       ${dm ? `<button class="btn ${edit ? 'primary' : ''} campeditbtn" data-act="campEdit">${edit ? 'Done editing' : 'Edit campaign'}</button>` : ''}
     </section>`;
-  const pending = CL.owner && pendingP.length ? `<div class="panel pendingpanel"><h3 style="margin-top:0">Waiting to join (${pendingP.length})</h3>
-      ${pendingP.map(([id, p]) => `<div class="partyrow">${avatarHTML(id, 'sm')}<div style="flex:1;min-width:0"><strong>${esc(p.name || 'Someone')}</strong></div>
-        <button class="btn sm primary" data-act="approveP" data-id="${id}">Let in</button><button class="btn sm ghost danger" data-act="removeP" data-id="${id}">Turn away</button></div>`).join('')}</div>` : '';
+  const pending = '';
   const party = `<section class="party"><div class="row"><h2 style="margin:0 auto 0 0">The party</h2><span class="muted small">${chars.length} hero${chars.length === 1 ? '' : 'es'}</span></div>
       ${chars.length || noChar.length ? `<div class="plates">${chars.map(plateCard).join('')}${noChar.map(([id]) => `<div class="plate plate-empty">${avatarHTML(id, 'sm')}<span><strong>${esc(nameOf(id))}</strong><br><span class="muted small">hasn’t made a character yet</span></span></div>`).join('')}</div>`
         : `<div class="plate plate-empty"><span class="muted">${dm ? 'No heroes yet. Send your players the link, let them in when they sign up, and their characters will appear here.' : 'No heroes yet — be the first. Create a character on the Characters page.'}</span></div>`}</section>`;
@@ -2609,6 +2700,42 @@ function accountDialog(){
     <label class="field"><span>Name shown to the party</span><input type="text" id="acctName" value="${esc(CL.myName)}" maxlength="60"></label>
     <div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn ghost" data-act="signOut">Sign out</button><button class="btn ghost" data-act="closeDlg">Close</button><button class="btn primary" data-act="saveName">Save name</button></div>`);
 }
+
+// ---------- campaign picker
+function campTile(cid, c){
+  const mine = CL.owner || (CL.camp && CL.camp.dmUid === CL.me);
+  let h = 0; for (const ch of String(cid)) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return `<article class="camptile" style="background-image:linear-gradient(135deg, hsl(${h} 32% 26%), hsl(${(h+50)%360} 30% 16%))">
+    <button class="camptile-main" data-act="openCamp" data-id="${cid}">
+      <span class="camptile-name">${esc(c.name || 'Untitled campaign')}</span>
+      ${c.tagline ? `<span class="camptile-tag">${esc(c.tagline)}</span>` : ''}
+      <span class="camptile-go">Open →</span></button>
+    ${CL.owner ? `<button class="plate-edit" data-act="delCamp" data-id="${cid}" title="Delete this campaign">Delete</button>` : ''}
+  </article>`;
+}
+function renderPicker(){
+  const camps = Object.entries(CL.camps).sort((a, b) => (a[1].createdAt || 0) - (b[1].createdAt || 0));
+  const people = Object.entries(CL.users).filter(([id]) => id !== CL.me);
+  return `<main class="wrap picker">
+    <section class="hero"><h1>${CL.owner ? 'Your campaigns' : 'Your campaigns'}</h1>
+      <p>${CL.owner ? 'Run as many tables as you like. Each campaign has its own characters, sourcebooks, pages and notes.' : 'Open a campaign your DM has invited you to. Each one keeps its own characters.'}</p></section>
+    ${CL.owner && CL.legacy ? `<div class="panel pendingpanel"><h3 style="margin-top:0">Bring your first campaign across</h3>
+      <p class="small">“${esc(CL.legacy.name || 'Your campaign')}” was made before this site supported more than one campaign. Bringing it across keeps its pages, characters, players and notes.</p>
+      <button class="btn primary" data-act="migrate" ${CL.busy ? 'disabled' : ''}>Bring it across</button></div>` : ''}
+    ${camps.length ? `<div class="camptiles">${camps.map(([cid, c]) => campTile(cid, c)).join('')}</div>`
+      : `<div class="panel"><p class="muted" style="margin:0">${CL.owner ? 'No campaigns yet. Make your first one below.' : 'Your DM hasn’t invited you to a campaign yet. This page updates by itself when they do.'}</p></div>`}
+    ${CL.owner ? `<div class="panel"><h3 style="margin-top:0">Start a new campaign</h3>
+      <div class="row" style="gap:8px"><input type="text" id="newCampName" placeholder="Campaign name" maxlength="80" style="flex:1;min-width:200px">
+      <button class="btn primary" data-act="newCamp" ${CL.busy ? 'disabled' : ''}>Create campaign</button></div></div>
+      <div class="panel"><h3 style="margin-top:0">People on this site</h3>
+        <p class="muted small" style="margin-top:0">Anyone who makes an account here waits until you invite them. Invite the same person to as many campaigns as you like.</p>
+        ${people.length ? people.map(([id, u]) => `<div class="partyrow">${avatarHTML(id, 'sm')}
+          <div style="flex:1;min-width:0"><strong>${esc(u.name || 'A player')}</strong>${u.email ? ` <span class="muted small">${esc(u.email)}</span>` : ''}
+            <div class="invrow">${camps.length ? camps.map(([cid, c]) => `<button class="invchip ${(u.campaigns || []).includes(cid) ? 'on' : ''}" data-act="${(u.campaigns || []).includes(cid) ? 'uninviteAt' : 'inviteAt'}" data-id="${id}" data-cid="${cid}" title="${(u.campaigns || []).includes(cid) ? 'Remove from' : 'Invite to'} ${esc(c.name || '')}">${(u.campaigns || []).includes(cid) ? '✓ ' : '+ '}${esc(c.name || 'Campaign')}</button>`).join('') : '<span class="muted small">Make a campaign first.</span>'}</div>
+          </div></div>`).join('') : '<p class="muted small" style="margin:0">Nobody else has signed up yet. Send your players the link to this site.</p>'}
+      </div>` : ''}
+    <div style="height:60px"></div></main>`;
+}
 async function authSubmit(){
   const m = CL.authMode, email = (document.getElementById('auEmail')||{}).value || '', pw = (document.getElementById('auPass')||{}).value || '';
   const name = ((document.getElementById('auName')||{}).value || '').trim();
@@ -2627,7 +2754,18 @@ document.addEventListener('submit', e => { if (e.target && e.target.dataset && e
 
 
 Object.assign(ACT, {
-  enterCampaign(){ enterCampaign(); },
+  openCamp(el){ enterCampaign(el.dataset.id); },
+  toPicker(){ leaveCampaign(); },
+  async newCamp(){ const el = document.getElementById('newCampName'); const n = (el && el.value || '').trim().slice(0, 80); if (!n) { toast('Give the campaign a name first.'); return; }
+    CL.busy = true; safeRender(); const cid = await createCampaign(n); CL.busy = false; if (cid) { safeRender(); enterCampaign(cid); } else safeRender(); },
+  async delCamp(el){ const cid = el.dataset.id; const c = CL.camps[cid] || {};
+    if (!confirm(`Delete “${c.name || 'this campaign'}”? Its pages and notes go for everyone. Characters stay in the database but nobody will be able to open them.`)) return;
+    try { await CL.db.doc(campPath(cid)).delete(); delete CL.camps[cid]; if (CL.cid === cid) leaveCampaign(); else safeRender(); } catch(e) { cloudErr(e, 'that deletion'); } },
+  migrate(){ migrateLegacy(); },
+  invite(el){ inviteUser(el.dataset.id, CL.cid); },
+  uninvite(el){ const id = el.dataset.id; if (!confirm(`Remove ${nameOf(id)} from this campaign? Their characters stay saved, and you can invite them back.`)) return; uninviteUser(id, CL.cid); },
+  inviteAt(el){ inviteUser(el.dataset.id, el.dataset.cid); },
+  uninviteAt(el){ const id = el.dataset.id, cid = el.dataset.cid; if (!confirm(`Remove ${nameOf(id)} from “${(CL.camps[cid]||{}).name || 'that campaign'}”?`)) return; uninviteUser(id, cid); },
   enterLocal(){ S.view = 'home'; S.cur = null; safeRender(); },
   reload(){ location.reload(); },
   authMode(el){ CL.authMode = el.dataset.v; CL.authErr = ''; CL.authMsg = ''; safeRender(); },
@@ -2635,7 +2773,7 @@ Object.assign(ACT, {
     try { await CL.auth.signInWithPopup(prov); }
     catch(e) { if (['auth/popup-blocked','auth/operation-not-supported-in-this-environment','auth/cancelled-popup-request'].includes(e.code)) { try { await CL.auth.signInWithRedirect(prov); return; } catch(x) { e = x; } } CL.authErr = authMsg(e); safeRender(); } },
   async signOut(){ try { await CL.auth.signOut(); } catch(e) {} location.reload(); },
-  claimCampaign(){ claimCampaign(); },
+  claimSite(){ claimSite(); },
   async verifySend(){ try { await CL.fbUser.sendEmailVerification(); CL.authMsg = 'Sent. Check your inbox (and spam).'; } catch(e) { CL.authMsg = authMsg(e); } safeRender(); },
   async verifyCheck(){ try { await CL.fbUser.reload(); await CL.fbUser.getIdToken(true); } catch(e) {} CL.authMsg = ''; await onAuth(CL.auth.currentUser); if (CL.auth.currentUser && !CL.auth.currentUser.emailVerified) { CL.authMsg = 'Not verified yet — open the link in the email first.'; safeRender(); } },
   toCampaign(){ if (!CL.on) return; S.view = 'campaign'; S.cur = null; safeRender(); window.scrollTo(0,0); },
@@ -2660,11 +2798,11 @@ Object.assign(ACT, {
   async noteDel(el){ const id = el.dataset.id; const n = CL.notes[id]; if (!n) return;
     if ((n.text || n.title) && !confirm(`Delete the note “${n.title || 'Untitled'}” for everyone?`)) return;
     try { await CL.db.doc('notes/' + id).delete(); delete CL.notes[id]; safeRender(); } catch(e) { cloudErr(e, 'that deletion'); } },
-  async approveP(el){ try { await CL.db.doc('players/' + el.dataset.id).update({approved: true}); toast('Let in. They can start building.'); } catch(e) { cloudErr(e, 'that'); } },
-  async removeP(el){ const id = el.dataset.id; const nm = nameOf(id); if (!confirm(`Remove ${nm} from the campaign? Their characters stay saved, and you can let them back in later.`)) return;
-    try { await CL.db.doc('players/' + id).delete(); } catch(e) { cloudErr(e, 'that'); } },
   async saveName(){ const v = ((document.getElementById('acctName')||{}).value || '').trim().slice(0, 60); if (!v) return;
-    try { await CL.db.doc('players/' + CL.me).update({name: v}); if (CL.fbUser) await CL.fbUser.updateProfile({displayName: v}); CL.myName = v; const dl = document.getElementById('dlg'); if (dl.open) dl.close(); toast('Name saved.'); safeRender(); } catch(e) { cloudErr(e, 'your name'); } },
+    try { await CL.db.doc('users/' + CL.me).update({name: v});
+      if (CL.cid && CL.members[CL.me]) await CL.db.doc(campPath(CL.cid, 'members/' + CL.me)).update({name: v}).catch(() => {});
+      if (CL.fbUser) await CL.fbUser.updateProfile({displayName: v}); CL.myName = v;
+      const dl = document.getElementById('dlg'); if (dl.open) dl.close(); toast('Name saved.'); safeRender(); } catch(e) { cloudErr(e, 'your name'); } },
   importLocal(){ const list = Object.values(CL.localChars || {}); if (!list.length) return;
     try { localStorage.setItem('delvebound.characters.backup', JSON.stringify(CL.localChars)); } catch(e) {}
     list.forEach(ch => { const c = migrate(clone(ch)); if (!SAFE_ID.test(c.id) || S.chars[c.id]) c.id = uid(); c._owner = CL.me; S.chars[c.id] = c; });
